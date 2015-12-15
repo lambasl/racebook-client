@@ -20,8 +20,18 @@ import scala.concurrent.{ Future, Promise }
 import scala.concurrent._
 import duration._
 import scala.util.Random
+import java.security.KeyPair
+import java.security.KeyPairGenerator
+import sun.misc.BASE64Encoder
+import sun.misc.BASE64Decoder
+import java.security.interfaces.RSAPublicKey
+import java.security.spec.EncodedKeySpec
+import java.security.spec.X509EncodedKeySpec
+import java.security.KeyFactory
+import javax.crypto.spec.SecretKeySpec
+import javax.crypto.Cipher
 
-case class AddUser(name: String)
+case class AddUser(name: String, pubKey: String)
 case class YourUserID(id: String)
 case class LikeMyPost(postID: String)
 case class CommentOnMyPost(postID: String)
@@ -29,13 +39,13 @@ case class AddMeAsFriend(id: String)
 case class CreateAlbum(owner: String, name: String)
 case class AddPhoto(user: String, photo: String, album: String)
 
-case class CreatePost(user: String, data: String)
+case class CreatePost(user: String, data: String, encryptedKey: String)
 case class Like(id: String, typ: String, userName: String, userId: String)
 case class Comment(id: String, typ: String, userName: String, userId: String, comment: String)
 case class AddFriend(from: String, to: String)
 object FacebookJSONProtocol extends DefaultJsonProtocol {
-  implicit val format = jsonFormat1(AddUser.apply)
-  implicit val format2 = jsonFormat2(CreatePost.apply)
+  implicit val format = jsonFormat2(AddUser.apply)
+  implicit val format2 = jsonFormat3(CreatePost.apply)
   implicit val format3 = jsonFormat4(Like.apply)
   implicit val format4 = jsonFormat5(Comment.apply)
   implicit val format5 = jsonFormat2(AddFriend.apply)
@@ -44,15 +54,21 @@ object FacebookJSONProtocol extends DefaultJsonProtocol {
 }
 
 object Client extends App {
-  var totalNumberOfActors: Int = 1000
+  var userToKeysMap = Map[String, KeyPair]()
+  val encoder = new BASE64Encoder
+  val decoder = new BASE64Decoder
+  
+  
+
+  var totalNumberOfActors: Int = 1//1000
   if (args.length != 1) {
     println("Number of users not specified. Using default value of 10000")
   } else {
     totalNumberOfActors = args(0).toInt
   }
-  val aggActors: Int = (0.2 * totalNumberOfActors).asInstanceOf[Int]
-  val modActors: Int = (0.5 * totalNumberOfActors).asInstanceOf[Int]
-  val dormantActors: Int = (0.3 * totalNumberOfActors).asInstanceOf[Int]
+  val aggActors: Int = 0//(0.2 * totalNumberOfActors).asInstanceOf[Int]
+  val modActors: Int = 0//(0.5 * totalNumberOfActors).asInstanceOf[Int]
+  val dormantActors: Int = 1//(0.3 * totalNumberOfActors).asInstanceOf[Int]
   var totalRequests: Int = 0
   var createPostReqs: Int = 0
   var fetchPostReqs: Int = 0
@@ -122,6 +138,11 @@ object Client extends App {
     var photosToBeUploaded: Int = 0
     var albumsToBeCreated: Int = 0
     var numberOfFriends: Int = 0
+    var keyPair:KeyPair = null
+    val encryptionKey = "MZygpewJsCpRrfOr"
+    val keySpec = new SecretKeySpec(encryptionKey.getBytes("UTF-8"), "AES")
+    val cipher = Cipher.getInstance("AES")
+    cipher.init(Cipher.ENCRYPT_MODE, keySpec)
     def receive = {
       case "Be Aggressive" => {
         postsToBeCreated = 20
@@ -183,7 +204,10 @@ object Client extends App {
       }
     }
     def signUp = {
-      val responseFuture = pipeline(Post("http://localhost:8080/user/add", AddUser(identity.toString())))
+      keyPair = generateKeyPair()
+      userToKeysMap += (identity.toString() -> keyPair)
+      val pubKeyEncoded = encoder.encode(keyPair.getPublic.getEncoded)
+      val responseFuture = pipeline(Post("http://localhost:8080/user/add", AddUser(identity.toString(), pubKeyEncoded)))
       responseFuture onComplete {
         case Success(response) => {
           var tempID: String = ""
@@ -201,7 +225,14 @@ object Client extends App {
     def createPost = {
       val r = scala.util.Random
       var randomPostSelection = r.nextInt(20)
-      val responseFuture = pipeline(Post("http://localhost:8080/post/create", CreatePost(userID, randomStatus(randomPostSelection))))
+      val postText = randomStatus(randomPostSelection)
+      val encryptedBytes = cipher.doFinal(postText.getBytes("UTF-8"))
+      val encryptedPostText = encoder.encode(encryptedBytes)
+      val cipherRsa = Cipher.getInstance("RSA")
+      cipherRsa.init(Cipher.ENCRYPT_MODE, keyPair.getPublic)
+      val encyrptedKeyBytes = cipherRsa.doFinal(encryptionKey.getBytes("UTF-8"))
+      val encryptedKey = encoder.encode(encyrptedKeyBytes)
+      val responseFuture = pipeline(Post("http://localhost:8080/post/create", CreatePost(userID, encryptedPostText, encryptedKey)))
       responseFuture onComplete {
         case Success(response) =>
           var postID: String = response.toString()
@@ -246,6 +277,13 @@ object Client extends App {
           log.error(error, "Unable to create album.")
         }
       }
+    }
+    
+    def generateKeyPair() : KeyPair ={
+      val keygen =  KeyPairGenerator.getInstance("RSA")
+      keygen.initialize(1024)
+      val keyPair = keygen.generateKeyPair()
+      keyPair
     }
   }
 }
