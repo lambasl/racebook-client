@@ -30,6 +30,7 @@ import java.security.spec.X509EncodedKeySpec
 import java.security.KeyFactory
 import javax.crypto.spec.SecretKeySpec
 import javax.crypto.Cipher
+import java.nio.file.{Files, Paths}
 
 case class AddUser(name: String, pubKey: String)
 case class YourUserID(id: String)
@@ -41,13 +42,13 @@ case class AddPhoto(user: String, photo: String, album: String)
 
 case class CreatePost(user: String, data: String, encryptedKey: String)
 case class Like(id: String, typ: String, userName: String, userId: String)
-case class Comment(id: String, typ: String, userName: String, userId: String, comment: String)
+case class Comment(id: String, typ: String, userName: String, userId: String, comment: String, encryptedKey: String)
 case class AddFriend(from: String, to: String)
 object FacebookJSONProtocol extends DefaultJsonProtocol {
   implicit val format = jsonFormat2(AddUser.apply)
   implicit val format2 = jsonFormat3(CreatePost.apply)
   implicit val format3 = jsonFormat4(Like.apply)
-  implicit val format4 = jsonFormat5(Comment.apply)
+  implicit val format4 = jsonFormat6(Comment.apply)
   implicit val format5 = jsonFormat2(AddFriend.apply)
   implicit val format6 = jsonFormat2(CreateAlbum.apply)
   implicit val format7 = jsonFormat3(AddPhoto.apply)
@@ -60,7 +61,7 @@ object Client extends App {
   
   
 
-  var totalNumberOfActors: Int = 1//1000
+  var totalNumberOfActors: Int = 2//1000
   if (args.length != 1) {
     println("Number of users not specified. Using default value of 10000")
   } else {
@@ -186,7 +187,14 @@ object Client extends App {
       case CommentOnMyPost(postID: String) => {
         val r = scala.util.Random
         var randomCommentSelection = r.nextInt(20)
-        val responseFuture = pipeline(Post("http://localhost:8080/comment", Comment(postID, "post", identity.toString(), userID, randomStatus(randomCommentSelection))))
+        val commentText = randomStatus(randomCommentSelection)
+        val encryptedBytes = cipher.doFinal(commentText.getBytes("UTF-8"))
+        val encryptedCommentText = encoder.encode(encryptedBytes)
+        val cipherRsa = Cipher.getInstance("RSA")
+        cipherRsa.init(Cipher.ENCRYPT_MODE, keyPair.getPublic)
+        val encyrptedKeyBytes = cipherRsa.doFinal(encryptionKey.getBytes("UTF-8"))
+        val encryptedKey = encoder.encode(encyrptedKeyBytes)
+        val responseFuture = pipeline(Post("http://localhost:8080/comment", Comment(postID, "post", identity.toString(), userID, encryptedCommentText, encryptedKey)))
       }
       case AddMeAsFriend(id: String) => {
         if (userID != "") {
@@ -263,7 +271,9 @@ object Client extends App {
           var idBeginning = albumID.indexOf("\"")
           var idEnding = albumID.lastIndexOf("\"")
           albumID = (albumID.substring(idBeginning + 1, idEnding))
-          val addPhoto = pipeline(Post("http://localhost:8080/photo/add", AddPhoto(userID, "photo.jpeg", albumID)))
+          val imgBytes = Files.readAllBytes(Paths.get("images/aws_cost.jpeg"))
+          val imgStr = encoder.encode(imgBytes)
+          val addPhoto = pipeline(Post("http://localhost:8080/photo/add", AddPhoto(userID, imgStr, albumID)))
           addPhoto onComplete {
             case Success(response) => {
               println(response)
