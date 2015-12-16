@@ -61,15 +61,15 @@ object Client extends App {
   
   
 
-  var totalNumberOfActors: Int = 10//1000
+  var totalNumberOfActors: Int = 100//1000
   if (args.length != 1) {
     println("Number of users not specified. Using default value of 10000")
   } else {
     totalNumberOfActors = args(0).toInt
   }
-  val aggActors: Int = 0//(0.2 * totalNumberOfActors).asInstanceOf[Int]
-  val modActors: Int = 0//(0.5 * totalNumberOfActors).asInstanceOf[Int]
-  val dormantActors: Int = 1//(0.3 * totalNumberOfActors).asInstanceOf[Int]
+  val aggActors: Int = 20//(0.2 * totalNumberOfActors).asInstanceOf[Int]
+  val modActors: Int = 50//(0.5 * totalNumberOfActors).asInstanceOf[Int]
+  val dormantActors: Int = 30//(0.3 * totalNumberOfActors).asInstanceOf[Int]
   var totalRequests: Int = 0
   var createPostReqs: Int = 0
   var fetchPostReqs: Int = 0
@@ -115,6 +115,7 @@ object Client extends App {
   master ! "Start"
 
   class Master extends Actor {
+    var actorsDoneWithFriendRequests: Int = 0
     def receive = {
       case "Start" => {
         for (x <- 1 to totalNumberOfActors) {
@@ -128,6 +129,14 @@ object Client extends App {
         }
         for (x <- (aggActors + modActors + 1) to (totalNumberOfActors)) {
           context.actorSelection("../" + x.toString) ! "Be Dormant"
+        }
+      }
+      case "FriendRequestsSent" => {
+        actorsDoneWithFriendRequests = actorsDoneWithFriendRequests + 1
+        if (actorsDoneWithFriendRequests == totalNumberOfActors) {
+          for (x <- 1 to totalNumberOfActors) {
+            context.actorSelection("../" + x.toString) ! "CreateContent"
+          }
         }
       }
     }
@@ -173,6 +182,9 @@ object Client extends App {
           var randomActor = r.nextInt(identity)
           context.actorSelection("../" + randomActor.toString()) ! AddMeAsFriend(userID)
         }
+        master ! "FriendRequestsSent"
+      }
+      case "CreateContent" => {
         for (i <- 1 to postsToBeCreated) {
           createPost
         }
