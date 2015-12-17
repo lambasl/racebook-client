@@ -137,10 +137,10 @@ object Client extends App {
           Thread.sleep(10000)
           for (x <- 1 to totalNumberOfActors) {
             import system.dispatcher
-            //val actorRef = Await.result(context.actorSelection("../" + x.toString).resolveOne()(10000), 100000 milliseconds)
-            //system.scheduler.scheduleOnce(1000 milliseconds, actorRef, "CreateContent")
+            val actorRef = Await.result(context.actorSelection("../" + x.toString).resolveOne()(10000), 100000 milliseconds)
+            system.scheduler.scheduleOnce(1000 milliseconds, actorRef, "CreateContent")
 
-            context.actorSelection("../" + x.toString) ! "CreateContent"
+            //context.actorSelection("../" + x.toString) ! "CreateContent"
           }
         }
       }
@@ -154,7 +154,7 @@ object Client extends App {
     var albumsToBeCreated: Int = 0
     var numberOfFriends: Int = 0
     var keyPair: KeyPair = null
-    val encryptionKey = "MZygpewJsCpRrfOr"
+    val encryptionKey = randomAlphaNumericString(16)
     val keySpec = new SecretKeySpec(encryptionKey.getBytes("UTF-8"), "AES")
     val cipher = Cipher.getInstance("AES")
     cipher.init(Cipher.ENCRYPT_MODE, keySpec)
@@ -202,25 +202,30 @@ object Client extends App {
         getPost onComplete {
           case Success(content) => {
             val p = content.entity.asString
-            if(p!= null && p.length() > 2){
-            var b = com.mongodb.util.JSON.parse(p)
-            println(b.toString())
-            var jsonObt: JsValue = b.toString().parseJson
-            val data = jsonObt.asJsObject.getFields("data").head.toString().replaceAll("\\\\n", "").replaceAll("\"", "").replaceAll("\\\\", "")
-            val key = jsonObt.asJsObject.getFields("key").head.toString().replaceAll("\\\\n", "").replaceAll("\"", "").replaceAll("\\\\", "")
-            //println("$$key=" + key)
-            //println("$$data=" + data)
-            val decodedData = decoder.decodeBuffer(data)
-            val decodedKey = decoder.decodeBuffer(key)
-            //println("decoded data:" + new String(decodedData) + ",decode key:" + new String(decodedKey))
-            val cipherRsa = Cipher.getInstance("RSA")
-            cipherRsa.init(Cipher.DECRYPT_MODE, userToKeysMap.get(userID).get.getPrivate)
-            val aesKey = new String(cipherRsa.doFinal(decodedKey))
-            val keySpec = new SecretKeySpec(aesKey.getBytes("UTF-8"), "AES")
-            val cipher = Cipher.getInstance("AES")
-            cipher.init(Cipher.DECRYPT_MODE, keySpec)
-            val decryptedData = cipher.doFinal(decoder.decodeBuffer(data))
-            println("Post :" + postID + ":" + new String(decryptedData))
+            if (p != null && p.length() > 2) {
+              var b = com.mongodb.util.JSON.parse(p)
+              println(b.toString())
+              var jsonObt: JsValue = b.toString().parseJson
+              val data = jsonObt.asJsObject.getFields("data").head.toString().replaceAll("\\\\n", "").replaceAll("\"", "").replaceAll("\\\\", "")
+              val key = jsonObt.asJsObject.getFields("key").head.toString().replaceAll("\\\\n", "").replaceAll("\"", "").replaceAll("\\\\", "")
+              if (key == "NA") {
+                println("Post :" + postID + ":" + new String(data))
+              }
+              else {
+                //println("$$key=" + key)
+              //println("$$data=" + data)
+              val decodedData = decoder.decodeBuffer(data)
+              val decodedKey = decoder.decodeBuffer(key)
+              //println("decoded data:" + new String(decodedData) + ",decode key:" + new String(decodedKey))
+              val cipherRsa = Cipher.getInstance("RSA")
+              cipherRsa.init(Cipher.DECRYPT_MODE, userToKeysMap.get(userID).get.getPrivate)
+              val aesKey = new String(cipherRsa.doFinal(decodedKey))
+              val keySpec = new SecretKeySpec(aesKey.getBytes("UTF-8"), "AES")
+              val cipher = Cipher.getInstance("AES")
+              cipher.init(Cipher.DECRYPT_MODE, keySpec)
+              val decryptedData = cipher.doFinal(decoder.decodeBuffer(data))
+              println("Post :" + postID + ":" + new String(decryptedData))
+              }
             }
           }
         }
@@ -294,6 +299,7 @@ object Client extends App {
               var value: JsValue = arr.elements(i).asInstanceOf[JsValue]
               friends += value.asJsObject.fields.keySet.head.toString()
             }
+            friends += userID
             var iter = friends.iterator
             while (iter.hasNext) {
               val frnd = iter.next()
@@ -307,7 +313,17 @@ object Client extends App {
             }
           }
           val n = collection.immutable.Map(m.toList: _*)
-          val responseFuture = pipeline(Post("http://localhost:8080/post/create", CreatePost(userID, encryptedPostText, scala.util.parsing.json.JSONObject(n).toString(), "F")))
+          val priv = scala.util.Random
+          var setPriv = priv.nextInt(2)
+          var string0: String = postText
+          var string1: String = ""
+          var string2: String = "P"
+          if (setPriv == 0) {
+            string0 = encryptedPostText
+            string1 = scala.util.parsing.json.JSONObject(n).toString()
+            string2 = "F"
+          }
+          val responseFuture = pipeline(Post("http://localhost:8080/post/create", CreatePost(userID, string0, string1, string2)))
           responseFuture onComplete {
             case Success(response) =>
               var postID: String = response.toString()
@@ -365,7 +381,19 @@ object Client extends App {
       keyPair
     }
 
-
+    def randomStringFromCharList(length: Int, chars: Seq[Char]): String = {
+      val sb = new StringBuilder
+      for (i <- 1 to length) {
+        val r = scala.util.Random
+        val randomNum = r.nextInt(chars.length)
+        sb.append(chars(randomNum))
+      }
+      sb.toString
+    }
+    def randomAlphaNumericString(length: Int): String = {
+      val chars = ('a' to 'z') ++ ('A' to 'Z') ++ ('0' to '9')
+      randomStringFromCharList(length, chars)
+    }
 
   }
 }
