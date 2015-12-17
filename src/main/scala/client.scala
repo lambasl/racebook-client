@@ -41,6 +41,7 @@ case class CommentOnMyPost(postID: String)
 case class AddMeAsFriend(id: String)
 case class CreateAlbum(owner: String, name: String, permission: String)
 case class AddPhoto(user: String, photo: String, album: String, permission: String)
+case class Authenticate(userID: String, publicKey: String, rawData: String, encryptedData: String)
 
 case class CreatePost(user: String, data: String, encryptedKey: String, permission: String)
 case class Like(id: String, typ: String, userName: String, userId: String)
@@ -54,6 +55,7 @@ object FacebookJSONProtocol extends DefaultJsonProtocol {
   implicit val format5 = jsonFormat2(AddFriend.apply)
   implicit val format6 = jsonFormat3(CreateAlbum.apply)
   implicit val format7 = jsonFormat4(AddPhoto.apply)
+  implicit val format8 = jsonFormat4(Authenticate.apply)
 }
 
 object Client extends App {
@@ -61,7 +63,7 @@ object Client extends App {
   val encoder = new BASE64Encoder
   val decoder = new BASE64Decoder
 
-  var totalNumberOfActors: Int = 100 //1000
+  var totalNumberOfActors: Int = 10 //1000
   if (args.length != 1) {
     println("Number of users not specified. Using default value of 10000")
   } else {
@@ -182,12 +184,28 @@ object Client extends App {
       }
       case YourUserID(id: String) => {
         userID = id
-        for (i <- 1 to numberOfFriends) {
+        self ! "Authenticate"
+
+        
+      }
+      case "Authenticate" => {
+        val cipherRsa = Cipher.getInstance("RSA")
+        cipherRsa.init(Cipher.ENCRYPT_MODE, keyPair.getPrivate)
+        val encyrptedKeyBytes = cipherRsa.doFinal(encryptionKey.getBytes("UTF-8"))
+        val encodedKey = encoder.encode(encyrptedKeyBytes)
+        println("BE: " + encryptionKey + " AE: " + new String(encyrptedKeyBytes))
+        val pubKeyEncoded = encoder.encode(keyPair.getPublic.getEncoded)
+        val responseFuture = pipeline(Post("http://localhost:8080/authenticate", Authenticate(userID, pubKeyEncoded, encryptionKey, encodedKey)))
+        responseFuture onComplete {
+          case Success(content) => {
+          for (i <- 1 to numberOfFriends) {
           val r = scala.util.Random
           var randomActor = r.nextInt(identity)
           context.actorSelection("../" + randomActor.toString()) ! AddMeAsFriend(userID)
         }
         master ! "FriendRequestsSent"
+          }
+        }
       }
       case "CreateContent" => {
         for (i <- 1 to postsToBeCreated) {
@@ -210,21 +228,24 @@ object Client extends App {
               val key = jsonObt.asJsObject.getFields("key").head.toString().replaceAll("\\\\n", "").replaceAll("\"", "").replaceAll("\\\\", "")
               if (key == "NA") {
                 println("Post :" + postID + ":" + new String(data))
-              }
-              else {
+              } else {
+                try{
                 //println("$$key=" + key)
-              //println("$$data=" + data)
-              val decodedData = decoder.decodeBuffer(data)
-              val decodedKey = decoder.decodeBuffer(key)
-              //println("decoded data:" + new String(decodedData) + ",decode key:" + new String(decodedKey))
-              val cipherRsa = Cipher.getInstance("RSA")
-              cipherRsa.init(Cipher.DECRYPT_MODE, userToKeysMap.get(userID).get.getPrivate)
-              val aesKey = new String(cipherRsa.doFinal(decodedKey))
-              val keySpec = new SecretKeySpec(aesKey.getBytes("UTF-8"), "AES")
-              val cipher = Cipher.getInstance("AES")
-              cipher.init(Cipher.DECRYPT_MODE, keySpec)
-              val decryptedData = cipher.doFinal(decoder.decodeBuffer(data))
-              println("Post :" + postID + ":" + new String(decryptedData))
+                //println("$$data=" + data)
+                val decodedData = decoder.decodeBuffer(data)
+                val decodedKey = decoder.decodeBuffer(key)
+                //println("decoded data:" + new String(decodedData) + ",decode key:" + new String(decodedKey))
+                val cipherRsa = Cipher.getInstance("RSA")
+                cipherRsa.init(Cipher.DECRYPT_MODE, userToKeysMap.get(userID).get.getPrivate)
+                val aesKey = new String(cipherRsa.doFinal(decodedKey))
+                val keySpec = new SecretKeySpec(aesKey.getBytes("UTF-8"), "AES")
+                val cipher = Cipher.getInstance("AES")
+                cipher.init(Cipher.DECRYPT_MODE, keySpec)
+                val decryptedData = cipher.doFinal(decoder.decodeBuffer(data))
+                println("Post :" + postID + ":" + new String(decryptedData))
+                }catch {
+                  case e: Exception => println(e.getMessage)
+                }
               }
             }
           }
