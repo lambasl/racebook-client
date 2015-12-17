@@ -33,6 +33,7 @@ import javax.crypto.Cipher
 import java.nio.file.{ Files, Paths }
 import scala.collection.mutable.HashSet
 import org.specs2.json.Json
+import spray.http.HttpCookie
 
 case class AddUser(name: String, pubKey: String)
 case class YourUserID(id: String)
@@ -47,6 +48,7 @@ case class CreatePost(user: String, data: String, encryptedKey: String, permissi
 case class Like(id: String, typ: String, userName: String, userId: String)
 case class Comment(id: String, typ: String, userName: String, userId: String, comment: String, encryptedKey: String)
 case class AddFriend(from: String, to: String)
+case class Login(userID: String, password: String)
 object FacebookJSONProtocol extends DefaultJsonProtocol {
   implicit val format = jsonFormat2(AddUser.apply)
   implicit val format2 = jsonFormat4(CreatePost.apply)
@@ -56,6 +58,7 @@ object FacebookJSONProtocol extends DefaultJsonProtocol {
   implicit val format6 = jsonFormat3(CreateAlbum.apply)
   implicit val format7 = jsonFormat4(AddPhoto.apply)
   implicit val format8 = jsonFormat4(Authenticate.apply)
+  implicit val format9 = jsonFormat2(Login.apply)
 }
 
 object Client extends App {
@@ -63,7 +66,7 @@ object Client extends App {
   val encoder = new BASE64Encoder
   val decoder = new BASE64Decoder
 
-  var totalNumberOfActors: Int = 10 //1000
+  var totalNumberOfActors: Int = 100 //1000
   if (args.length != 1) {
     println("Number of users not specified. Using default value of 10000")
   } else {
@@ -156,6 +159,7 @@ object Client extends App {
     var albumsToBeCreated: Int = 0
     var numberOfFriends: Int = 0
     var keyPair: KeyPair = null
+    var cookie: HttpCookie = null
     val encryptionKey = randomAlphaNumericString(16)
     val keySpec = new SecretKeySpec(encryptionKey.getBytes("UTF-8"), "AES")
     val cipher = Cipher.getInstance("AES")
@@ -184,9 +188,17 @@ object Client extends App {
       }
       case YourUserID(id: String) => {
         userID = id
+        self ! "login"
         self ! "Authenticate"
-
         
+      }
+     case "login" => {
+        val login = pipeline(Post("http://localhost:8080/login", Login(userID, "*****")))
+        login onComplete {
+          case Success(content) => 
+            val uuid = content.entity.asString.replaceAll("\"", "")
+            cookie = HttpCookie("sessionCookie", uuid)
+        }
       }
       case "Authenticate" => {
         val cipherRsa = Cipher.getInstance("RSA")
@@ -305,7 +317,7 @@ object Client extends App {
       val encryptedBytes = cipher.doFinal(postText.getBytes("UTF-8"))
       val encryptedPostText = encoder.encode(encryptedBytes)
       val response = pipeline {
-        Get("http://127.0.0.1:8080/" + userID + "/friends")
+        Get("http://127.0.0.1:8080/" + userID + "/friends") ~> addHeader(spray.http.HttpHeaders.Cookie(cookie))
       }
       var m = scala.collection.mutable.Map[String, String]()
       response.onComplete {
