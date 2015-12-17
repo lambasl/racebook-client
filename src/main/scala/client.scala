@@ -30,14 +30,16 @@ import java.security.spec.X509EncodedKeySpec
 import java.security.KeyFactory
 import javax.crypto.spec.SecretKeySpec
 import javax.crypto.Cipher
-import java.nio.file.{Files, Paths}
+import java.nio.file.{ Files, Paths }
+import scala.collection.mutable.HashSet
+import org.specs2.json.Json
 
 case class AddUser(name: String, pubKey: String)
 case class YourUserID(id: String)
 case class LikeMyPost(postID: String)
 case class CommentOnMyPost(postID: String)
 case class AddMeAsFriend(id: String)
-case class CreateAlbum(owner: String, name: String, permission:String)
+case class CreateAlbum(owner: String, name: String, permission: String)
 case class AddPhoto(user: String, photo: String, album: String, permission: String)
 
 case class CreatePost(user: String, data: String, encryptedKey: String, permission: String)
@@ -55,21 +57,19 @@ object FacebookJSONProtocol extends DefaultJsonProtocol {
 }
 
 object Client extends App {
-  var userToKeysMap = Map[String, KeyPair]()
+  var userToKeysMap = scala.collection.mutable.Map[String, KeyPair]()
   val encoder = new BASE64Encoder
   val decoder = new BASE64Decoder
-  
-  
 
-  var totalNumberOfActors: Int = 100//1000
+  var totalNumberOfActors: Int = 100 //1000
   if (args.length != 1) {
     println("Number of users not specified. Using default value of 10000")
   } else {
     totalNumberOfActors = args(0).toInt
   }
-  val aggActors: Int = 20//(0.2 * totalNumberOfActors).asInstanceOf[Int]
-  val modActors: Int = 50//(0.5 * totalNumberOfActors).asInstanceOf[Int]
-  val dormantActors: Int = 30//(0.3 * totalNumberOfActors).asInstanceOf[Int]
+  val aggActors: Int = (0.2 * totalNumberOfActors).asInstanceOf[Int]
+  val modActors: Int = (0.5 * totalNumberOfActors).asInstanceOf[Int]
+  val dormantActors: Int = (0.3 * totalNumberOfActors).asInstanceOf[Int]
   var totalRequests: Int = 0
   var createPostReqs: Int = 0
   var fetchPostReqs: Int = 0
@@ -134,7 +134,12 @@ object Client extends App {
       case "FriendRequestsSent" => {
         actorsDoneWithFriendRequests = actorsDoneWithFriendRequests + 1
         if (actorsDoneWithFriendRequests == totalNumberOfActors) {
+          Thread.sleep(10000)
           for (x <- 1 to totalNumberOfActors) {
+            import system.dispatcher
+            //val actorRef = Await.result(context.actorSelection("../" + x.toString).resolveOne()(10000), 100000 milliseconds)
+            //system.scheduler.scheduleOnce(1000 milliseconds, actorRef, "CreateContent")
+
             context.actorSelection("../" + x.toString) ! "CreateContent"
           }
         }
@@ -148,28 +153,28 @@ object Client extends App {
     var photosToBeUploaded: Int = 0
     var albumsToBeCreated: Int = 0
     var numberOfFriends: Int = 0
-    var keyPair:KeyPair = null
+    var keyPair: KeyPair = null
     val encryptionKey = "MZygpewJsCpRrfOr"
     val keySpec = new SecretKeySpec(encryptionKey.getBytes("UTF-8"), "AES")
     val cipher = Cipher.getInstance("AES")
     cipher.init(Cipher.ENCRYPT_MODE, keySpec)
     def receive = {
       case "Be Aggressive" => {
-        postsToBeCreated = 20
+        postsToBeCreated = 23
         albumsToBeCreated = 3
         photosToBeUploaded = 10
         numberOfFriends = 30
         signUp
       }
       case "Be Moderate" => {
-        postsToBeCreated = 10
+        postsToBeCreated = 15
         albumsToBeCreated = 2
         photosToBeUploaded = 10
         numberOfFriends = 20
         signUp
       }
       case "Be Dormant" => {
-        postsToBeCreated = 2
+        postsToBeCreated = 5
         albumsToBeCreated = 1
         photosToBeUploaded = 10
         numberOfFriends = 5
@@ -193,7 +198,32 @@ object Client extends App {
         }
       }
       case LikeMyPost(postID: String) => {
-        val getPost = pipeline(Get("http://localhost:8080/posts/" + postID))
+        val getPost = pipeline(Get("http://localhost:8080/posts/" + postID + "/" + userID))
+        getPost onComplete {
+          case Success(content) => {
+            val p = content.entity.asString
+            if(p!= null && p.length() > 2){
+            var b = com.mongodb.util.JSON.parse(p)
+            println(b.toString())
+            var jsonObt: JsValue = b.toString().parseJson
+            val data = jsonObt.asJsObject.getFields("data").head.toString().replaceAll("\\\\n", "").replaceAll("\"", "").replaceAll("\\\\", "")
+            val key = jsonObt.asJsObject.getFields("key").head.toString().replaceAll("\\\\n", "").replaceAll("\"", "").replaceAll("\\\\", "")
+            //println("$$key=" + key)
+            //println("$$data=" + data)
+            val decodedData = decoder.decodeBuffer(data)
+            val decodedKey = decoder.decodeBuffer(key)
+            //println("decoded data:" + new String(decodedData) + ",decode key:" + new String(decodedKey))
+            val cipherRsa = Cipher.getInstance("RSA")
+            cipherRsa.init(Cipher.DECRYPT_MODE, userToKeysMap.get(userID).get.getPrivate)
+            val aesKey = new String(cipherRsa.doFinal(decodedKey))
+            val keySpec = new SecretKeySpec(aesKey.getBytes("UTF-8"), "AES")
+            val cipher = Cipher.getInstance("AES")
+            cipher.init(Cipher.DECRYPT_MODE, keySpec)
+            val decryptedData = cipher.doFinal(decoder.decodeBuffer(data))
+            println("Post :" + postID + ":" + new String(decryptedData))
+            }
+          }
+        }
         val responseFuture = pipeline(Post("http://localhost:8080/like", Like(postID, "post", identity.toString(), userID)))
       }
       case CommentOnMyPost(postID: String) => {
@@ -225,7 +255,6 @@ object Client extends App {
     }
     def signUp = {
       keyPair = generateKeyPair()
-      userToKeysMap += (identity.toString() -> keyPair)
       val pubKeyEncoded = encoder.encode(keyPair.getPublic.getEncoded)
       val responseFuture = pipeline(Post("http://localhost:8080/user/add", AddUser(identity.toString(), pubKeyEncoded)))
       responseFuture onComplete {
@@ -235,6 +264,7 @@ object Client extends App {
           var idBeginning = tempID.indexOf("\"")
           var idEnding = tempID.lastIndexOf("\"")
           tempID = (tempID.substring(idBeginning + 1, idEnding))
+          userToKeysMap += tempID -> keyPair
           self ! YourUserID(tempID)
         }
         case Failure(error) => {
@@ -248,30 +278,57 @@ object Client extends App {
       val postText = randomStatus(randomPostSelection)
       val encryptedBytes = cipher.doFinal(postText.getBytes("UTF-8"))
       val encryptedPostText = encoder.encode(encryptedBytes)
-      val cipherRsa = Cipher.getInstance("RSA")
-      cipherRsa.init(Cipher.ENCRYPT_MODE, keyPair.getPublic)
-      val encyrptedKeyBytes = cipherRsa.doFinal(encryptionKey.getBytes("UTF-8"))
-      val encryptedKey = encoder.encode(encyrptedKeyBytes)
-      val responseFuture = pipeline(Post("http://localhost:8080/post/create", CreatePost(userID, encryptedPostText, encryptedKey, "F")))
-      responseFuture onComplete {
-        case Success(response) =>
-          var postID: String = response.toString()
-          var idBeginning = postID.indexOf("\"")
-          var idEnding = postID.lastIndexOf("\"")
-          postID = (postID.substring(idBeginning + 1, idEnding))
-          for (i <- 1 to 2) {
-            val r = scala.util.Random
-            var askToLike = r.nextInt(totalNumberOfActors)
-            context.actorSelection("../" + askToLike.toString) ! LikeMyPost(postID)
-          }
-          for (i <- 1 to 2) {
-            val r = scala.util.Random
-            var askToComment = r.nextInt(totalNumberOfActors)
-            context.actorSelection("../" + askToComment.toString()) ! CommentOnMyPost(postID)
-          }
-        case Failure(error) =>
-          log.error(error, "Failure Occured")
+      val response = pipeline {
+        Get("http://127.0.0.1:8080/" + userID + "/friends")
       }
+      var m = scala.collection.mutable.Map[String, String]()
+      response.onComplete {
+        case Success(content) =>
+          {
+            var friends = new scala.collection.mutable.HashSet[String]
+            val p = content.entity.asString
+            var b = com.mongodb.util.JSON.parse(p)
+            var jsonObt: JsValue = b.toString().parseJson
+            var arr: JsArray = jsonObt.asInstanceOf[JsArray]
+            for (i <- 0 until arr.elements.length) {
+              var value: JsValue = arr.elements(i).asInstanceOf[JsValue]
+              friends += value.asJsObject.fields.keySet.head.toString()
+            }
+            var iter = friends.iterator
+            while (iter.hasNext) {
+              val frnd = iter.next()
+              val keyPair1 = userToKeysMap.get(frnd)
+              val cipherRsa = Cipher.getInstance("RSA")
+              cipherRsa.init(Cipher.ENCRYPT_MODE, keyPair1.get.getPublic)
+              val encyrptedKeyBytes = cipherRsa.doFinal(encryptionKey.getBytes("UTF-8"))
+              val encodedKey = encoder.encode(encyrptedKeyBytes)
+              //println("encodedKey$$$$$=" + encodedKey)
+              m += (frnd -> encodedKey)
+            }
+          }
+          val n = collection.immutable.Map(m.toList: _*)
+          val responseFuture = pipeline(Post("http://localhost:8080/post/create", CreatePost(userID, encryptedPostText, scala.util.parsing.json.JSONObject(n).toString(), "F")))
+          responseFuture onComplete {
+            case Success(response) =>
+              var postID: String = response.toString()
+              var idBeginning = postID.indexOf("\"")
+              var idEnding = postID.lastIndexOf("\"")
+              postID = (postID.substring(idBeginning + 1, idEnding))
+              for (i <- 1 to 2) {
+                val r = scala.util.Random
+                var askToLike = r.nextInt(totalNumberOfActors)
+                context.actorSelection("../" + askToLike.toString) ! LikeMyPost(postID)
+              }
+              for (i <- 1 to 2) {
+                val r = scala.util.Random
+                var askToComment = r.nextInt(totalNumberOfActors)
+                context.actorSelection("../" + askToComment.toString()) ! CommentOnMyPost(postID)
+              }
+            case Failure(error) =>
+              log.error(error, "Failure Occured")
+          }
+      }
+
     }
     def createAlbum = {
       val r = scala.util.Random
@@ -300,12 +357,15 @@ object Client extends App {
         }
       }
     }
-    
-    def generateKeyPair() : KeyPair ={
-      val keygen =  KeyPairGenerator.getInstance("RSA")
+
+    def generateKeyPair(): KeyPair = {
+      val keygen = KeyPairGenerator.getInstance("RSA")
       keygen.initialize(1024)
       val keyPair = keygen.generateKeyPair()
       keyPair
     }
+
+
+
   }
 }

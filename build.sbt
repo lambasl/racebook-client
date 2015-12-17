@@ -22,7 +22,8 @@ libraryDependencies ++= {
     "ch.qos.logback"    %  "logback-classic" % "1.1.2",
     "com.typesafe.akka" %% "akka-testkit"    % akkaVersion  % "test",
     "io.spray"          %% "spray-testkit"   % sprayVersion % "test",
-    "org.specs2"        %% "specs2"          % "2.3.13"     % "test"
+    "org.specs2"        %% "specs2"          % "2.3.13"     % "test",
+    "org.mongodb"   %% "casbah"    % "3.0.0"
   )
 }
 
